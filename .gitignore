@@ -1,0 +1,15 @@
+# Compiled binaries + test artifacts.
+*.test
+*.out
+*.exe
+coverage.txt
+coverage.html
+
+# Go module artifacts.
+go.sum.bak
+
+# Editor / OS noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
