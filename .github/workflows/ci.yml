@@ -1,0 +1,112 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Coverage floor. console achieves 100.0% of statements; every covered
+  # path is arch-independent (the driver is a raw bidirectional byte
+  # stream with no per-message header — virtqueue avail/used ring codec is
+  # delegated to go-virtio/common), so the same figure holds on every
+  # target arch, including big-endian s390x.
+  COVER_MIN: "100.0"
+
+jobs:
+  # ---- Native runners --------------------------------------------------
+  native:
+    name: native ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: test (coverage)
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go test -cover ./... | tee cover.txt
+          pct=$(grep -oE 'coverage: [0-9.]+%' cover.txt | grep -oE '[0-9.]+' | head -1)
+          echo "coverage on ${{ matrix.arch }}: ${pct}% (floor ${COVER_MIN}%)"
+          awk -v p="$pct" -v m="$COVER_MIN" 'BEGIN { exit !(p+0 >= m+0) }' \
+            || { echo "coverage ${pct}% < ${COVER_MIN}%"; exit 1; }
+
+  # ---- Emulated targets (QEMU via binfmt) ------------------------------
+  # virtio is LITTLE-ENDIAN. console control/data framing is raw bytes, so
+  # the only endianness-sensitive codec is the virtqueue avail/used ring
+  # (in go-virtio/common). s390x is BIG-ENDIAN: it is the proof that the
+  # driver — pinned to go-virtio/common@main with the big-endian ring-index
+  # codec fix — runs correctly on big-endian hardware. It MUST pass.
+  emulated:
+    name: emulated ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: riscv64
+            image: debian:trixie
+            qemu_cpu: "rv64,v=true,vlen=128"
+          - arch: loong64
+            image: ghcr.io/loong64/debian:trixie
+            qemu_cpu: la464
+          - arch: ppc64le
+            image: debian:trixie
+            qemu_cpu: power9
+          - arch: s390x
+            image: debian:trixie
+            qemu_cpu: qemu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: register QEMU binfmt handlers
+        run: docker run --rm --privileged tonistiigi/binfmt --install all
+
+      - name: cross-compile per-package test binaries
+        run: |
+          set -euo pipefail
+          mkdir -p _tbin
+          for pkg in $(go list ./...); do
+            name=$(echo "$pkg" | tr '/.' '__')
+            GOOS=linux GOARCH=${{ matrix.arch }} CGO_ENABLED=0 \
+              go test -c -cover -o "_tbin/${name}.test" "$pkg"
+          done
+          ls -l _tbin
+
+      - name: run test binaries under QEMU (${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          fail=0
+          for bin in _tbin/*.test; do
+            [ -e "$bin" ] || continue
+            echo "::group::$bin"
+            out=$(docker run --rm --platform linux/${{ matrix.arch }} \
+              -e QEMU_CPU='${{ matrix.qemu_cpu }}' \
+              -v "$PWD/_tbin:/tbin:ro" \
+              ${{ matrix.image }} "/tbin/$(basename "$bin")" -test.v 2>&1) || fail=1
+            echo "$out"
+            pct=$(echo "$out" | grep -oE 'coverage: [0-9.]+%' | grep -oE '[0-9.]+' | head -1)
+            if [ -n "${pct:-}" ]; then
+              echo "coverage on ${{ matrix.arch }} ($bin): ${pct}% (floor ${COVER_MIN}%)"
+              awk -v p="$pct" -v m="$COVER_MIN" 'BEGIN { exit !(p+0 >= m+0) }' \
+                || { echo "coverage ${pct}% < ${COVER_MIN}%"; fail=1; }
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
