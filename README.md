@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/go-virtio/brand/main/social/go-virtio-console.png" alt="go-virtio/console" width="720"></p>
+
 # go-virtio/console
 
 Pure-Go virtio-console driver targeting the `go-virtio/common` transport
