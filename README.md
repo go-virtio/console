@@ -67,7 +67,7 @@ ready.
   - [`github.com/go-virtio/vsock`](https://github.com/go-virtio/vsock) —
     pure-Go virtio-vsock driver.
   - [`github.com/go-virtio/blk`](https://github.com/go-virtio/blk) —
-    placeholder for a future pure-Go virtio-blk driver.
+    pure-Go virtio-blk (block device) driver.
 
 ## License
 
